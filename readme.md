@@ -1,7 +1,7 @@
 CMB2 Field Type: EDD License
 ==================
 
-Custom fields for [CMB2](https://github.com/WebDevStudios/CMB2) to handle [EDD Software Licensing](https://easydigitaldownloads.com/downloads/software-licensing/) license activation and to automatically handle updates.
+Custom field for [CMB2](https://github.com/WebDevStudios/CMB2) to automatically handle [EDD Software Licensing](https://easydigitaldownloads.com/downloads/software-licensing/) license activation and item updates.
 
 ## Parameters
 
