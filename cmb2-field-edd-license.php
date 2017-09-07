@@ -33,6 +33,9 @@ if( ! class_exists( 'CMB2_Field_EDD_License' ) ) {
          */
         public function __construct() {
             add_filter( 'cmb2_admin_init', array( $this, 'includes' ) );
+
+            add_filter( 'cmb2_after_init', array( $this, 'license_deactivation_handler' ) );
+
             add_filter( 'cmb2_after_init', array( $this, 'check_updates' ), 9999 );
 
             add_filter( 'cmb2_render_class_edd_license', array( $this, 'render_class' ), 10, 2 );
@@ -63,6 +66,66 @@ if( ! class_exists( 'CMB2_Field_EDD_License' ) ) {
             wp_register_script( 'cmb-edd-license-js', plugins_url( 'assets/js/edd-license.js', __FILE__ ), array( 'jquery' ), self::VERSION, true );
 
             wp_enqueue_style( 'cmb-edd-license-css', plugins_url( 'assets/css/edd-license.css', __FILE__ ), array(), self::VERSION );
+        }
+
+        public function license_deactivation_handler() {
+            if( ! isset( $_REQUEST['edd_license_deactivate_license'] ) ) {
+                return;
+            }
+
+            // Add nonce for security and authentication.
+            $nonce_name   = isset( $_REQUEST['cmb2_edd_license_deactivation_nonce'] ) ? $_REQUEST['cmb2_edd_license_deactivation_nonce'] : '';
+            $nonce_action = 'cmb2_edd_license_deactivation_nonce_action';
+
+            // Check if nonce is set.
+            if ( ! isset( $nonce_name ) ) {
+                return;
+            }
+
+            // Check if nonce is valid.
+            if ( ! wp_verify_nonce( $nonce_name, $nonce_action ) ) {
+                return;
+            }
+
+            $meta_box_id = isset( $_REQUEST['edd_license_deactivate_cmb_id'] ) ? $_REQUEST['edd_license_deactivate_cmb_id'] : '';
+            $field_id = isset( $_REQUEST['edd_license_deactivate_field_id'] ) ? $_REQUEST['edd_license_deactivate_field_id'] : '';
+            $object_id = isset( $_REQUEST['edd_license_deactivate_object_id'] ) ? $_REQUEST['edd_license_deactivate_object_id'] : '';
+            $object_type = isset( $_REQUEST['edd_license_deactivate_object_type'] ) ? $_REQUEST['edd_license_deactivate_object_type'] : '';
+
+            // Check if field id is set.
+            if ( empty( $meta_box_id ) || empty( $field_id ) || empty( $object_id ) || empty( $object_type ) ) {
+                return;
+            }
+
+            $field = cmb2_get_field( $meta_box_id, $field_id, $object_id, $object_type );
+
+            if( $field->args( 'type' ) !== 'edd_license' ) {
+                return;
+            }
+
+            $license = cmb2_edd_license_data( $field->escaped_value() );
+            $license_status = ( $license !== false ) ? $license->license : false;
+
+            if( $license_status === 'valid' ) {
+
+                $args = wp_parse_args( $field->_data( 'args' ), array(
+                    'server'          => '',
+                    'license'         => $field->escaped_value(),
+                    'item_id'         => '',
+                    'item_name'       => '',
+                    'file'            => '',
+                    'version'         => '',
+                    'author'          => '',
+                    'wp_override'     => false,
+                ) );
+
+                $this->api_request( $args['server'], $args['license'], $args, 'deactivate_license' );
+
+            }
+
+            // TODO: Clear field value on success?
+
+            // TODO: Show admin notice with the operation result
         }
 
         public function check_updates() {
@@ -114,7 +177,7 @@ if( ! class_exists( 'CMB2_Field_EDD_License' ) ) {
          * @param CMB2_Field        $field    This field object
          */
         public function save_field( $field_id, $updated, $action, $field ) {
-            if( $field->args('type') !== 'edd_license' ) {
+            if( $field->args( 'type' ) !== 'edd_license' ) {
                 return;
             }
 
@@ -195,7 +258,7 @@ if( ! class_exists( 'CMB2_Field_EDD_License' ) ) {
 
             // Transient data
             $key                    = substr( md5( $license_key ), 0, 10 );
-            $status_lifetime        = apply_filters( 'cmb2_edd_license_status_lifetime', 48 * 60 * 60 );            // Default is set to two days
+            $data_lifetime          = apply_filters( 'cmb2_edd_license_data_lifetime', 48 * 60 * 60 );              // Default is set to two days
             $activation_lifetime    = apply_filters( 'cmb2_edd_license_activation_lifetime', 365 * 24 * 60 * 60 );  // Default is set to one year
 
             if ( $action == 'activate_license') {
@@ -205,8 +268,8 @@ if( ! class_exists( 'CMB2_Field_EDD_License' ) ) {
                  * The user will need to modify its license anyways so there is no risk
                  * of preventing further activation attempts.
                  */
-                if ( 'invalid' == $license_data->license ) {
-                    set_transient( "cmb2_edd_license_status_$key", 'invalid', $status_lifetime );
+                if ( 'invalid' === $license_data->license ) {
+                    set_transient( "cmb2_edd_license_data_$key", $license_data, $data_lifetime );
                     set_transient( "cmb2_edd_license_try_$key", true, $activation_lifetime );
                     return 'invalid';
                 }
@@ -225,11 +288,14 @@ if( ! class_exists( 'CMB2_Field_EDD_License' ) ) {
 
                 }
             } else if ( $action == 'deactivate_license') {
+                delete_transient( "cmb2_edd_license_try_$key" );
+                delete_transient( "cmb2_edd_license_data_$key" );
 
+                return true;
             } else {
 
-                // Set the status transient.
-                set_transient( "cmb2_edd_license_status_$key", $license_data->license, $status_lifetime );
+                // Set the data transient.
+                set_transient( "cmb2_edd_license_data_$key", $license_data, $data_lifetime );
 
             }
 
@@ -253,7 +319,7 @@ if( ! class_exists( 'CMB2_Field_EDD_License' ) ) {
             ) );
 
             // Check if we have all the required parameters.
-            if ( empty( $args['server'] ) || empty( $args['item_name'] ) || empty( $args['file'] ) ) {
+            if ( empty( $args['server'] ) || empty( $args['file'] ) ) {
                 return false;
             }
 
@@ -303,16 +369,35 @@ if( ! class_exists( 'CMB2_Field_EDD_License' ) ) {
     }
 
     /**
+     * Return the license data of a license key
+     *
+     * @param string $license_key   License key value (Just pass the field value)
+     * @return bool|stdClass        License data or false (if not license provided or not checked)
+     */
+    function cmb2_edd_license_data( $license_key ) {
+        if( ! empty( $license_key ) ) {
+            $key = substr( md5( $license_key ), 0, 10 );
+
+            if( false !== ( $license_data = get_transient( "cmb2_edd_license_data_$key" ) ) ) {
+                return $license_data;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Return the status of a license key
+     *
      * @param string $license_key   License key value (Just pass the field value)
      * @return bool|string          Value of license status, could return "valid", "invalid" or false (if not license provided or not checked)
      */
     function cmb2_edd_license_status( $license_key ) {
-        if( ! empty( $license_key ) ) {
-            $key = substr( md5( $license_key ), 0, 10 );
 
-            if( false !== ( $license_status = get_transient( "cmb2_edd_license_status_$key" ) ) ) {
-                return $license_status;
-            }
+        $license_data = cmb2_edd_license_data( $license_key );
+
+        if( $license_data ) {
+            return $license_data->license;
         }
 
         return false;
