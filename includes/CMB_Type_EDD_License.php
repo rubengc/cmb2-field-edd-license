@@ -30,6 +30,7 @@ class CMB_Type_EDD_License extends CMB2_Type_Base {
 		parent::__construct( $types, $args );
 
 		$this->type = $type ? $type : $this->type;
+
 	}
 
 	/**
@@ -40,6 +41,9 @@ class CMB_Type_EDD_License extends CMB2_Type_Base {
 	 * @return string       Form input element
 	 */
 	public function render( $args = array() ) {
+
+        global $cmb2_field_edd_license;
+
 		$args = empty( $args ) ? $this->args : $args;
 
         $args = $this->parse_args( $this->type, array(
@@ -54,19 +58,26 @@ class CMB_Type_EDD_License extends CMB2_Type_Base {
 
 		$field_args = $this->parse_args( $this->type, array(
 			// License
-			'server'          => '',
-			'item_id'         => '',
-			'item_name'       => '',
-			'file'            => '',
-			'version'         => '',
-			'author'          => '',
-			'wp_override'     => false,
+			'server'                            => '',
+			'item_id'                           => '',
+			'item_name'                         => '',
+			'file'                              => '',
+			'version'                           => '',
+			'author'                            => '',
+			'wp_override'                       => false,
 			// Extra settings
-			'deactivate_button' => __( 'Deactivate License', 'cmb2-edd-license' ),
-			'license_expiration' => true,
-			'renew_license' => __( 'Renew your license key.', 'cmb2-edd-license' ),
-			'renew_license_link' => false,
-			'renew_license_timestamp' => ( DAY_IN_SECONDS * 30 ),
+			'deactivate_button'                 => __( 'Deactivate License', 'cmb2-edd-license' ),      // string|false String to set the button text, false to remove it
+			'license_expiration'                => true,                                                // bool         True to enable license expiration notice, false to deactivate it
+			'renew_license'                     => __( 'Renew your license key.', 'cmb2-edd-license' ), // string|false String to set the renew license text, false to remove it
+			'renew_license_timestamp'           => ( DAY_IN_SECONDS * 30 ),                             // int          Minimum time to show the license renewal text, by default 30 days
+			// Links, used for license errors as a shortcut to business website
+			'renew_license_link' 		        => false,                                               // string|false Link where users can renew their licenses, false to remove it
+			'license_management_link' 	        => false,                                               // string|false Link where users can manage their licenses, false to remove it
+			'contact_link' 				        => false,                                               // string|false Link where users can contact with your team, false to remove it
+            // Hide license settings
+            'hide_license'                      => true,                                                // bool         True to hide the license (just if license is valid), with default settings license will be displayed as: **********1234
+            'hide_license_character'            => '*',                                                 // string       Character to hide the license
+            'hide_license_visible_characters'   => 4,                                                   // int          Number of visible license characters
 		), $this->field->_data( 'args' ) );
 
 		$this->field->add_js_dependencies( array(
@@ -76,9 +87,31 @@ class CMB_Type_EDD_License extends CMB2_Type_Base {
 		$license = cmb2_edd_license_data( $args['value'] );
 		$license_status = ( $license !== false ) ? $license->license : false;
 
+        // If user has input a license but there isn't any license object, then perform a new API request
+        // This lines fixes an issue with not properly activated keys
+        if( ! empty( $args['value'] ) && $license === false ) {
+
+            $cmb2_field_edd_license->api_request( $field_args['server'], $args['value'], $field_args, 'activate_license' );
+
+            $license = cmb2_edd_license_data( $args['value'] );
+            $license_status = ( $license !== false ) ? $license->license : false;
+
+        }
+
 		if( $license_status !== false) {
 			// Add the class license-{$license_status} (valid or invalid)
             $args['class'] .= ' license-' . $license_status;
+		}
+
+		// Error notice
+		$error_notice = '';
+
+		if( $license !== false && $license_status !== 'valid' ) {
+
+			$error_notice = '<p class="license-error">'
+				. $this->get_license_error( $license, $field_args )
+			. '</p>';
+
 		}
 
 		// Deactivation button
@@ -86,14 +119,12 @@ class CMB_Type_EDD_License extends CMB2_Type_Base {
 
 		if( $field_args['deactivate_button'] !== false && $license_status === 'valid' ) {
 			$deactivation_button = '<p class="deactivate-license">' .
-                '<form name="edd_license_deactivate_form" method="post">' .
                     wp_nonce_field( 'cmb2_edd_license_deactivation_nonce_action', 'cmb2_edd_license_deactivation_nonce' ) .
                     '<input type="hidden" name="edd_license_deactivate_cmb_id" value="' . $this->field->cmb_id . '"/>' .
                     '<input type="hidden" name="edd_license_deactivate_field_id" value="' . $this->_id() . '"/>' .
                     '<input type="hidden" name="edd_license_deactivate_object_id" value="' . $this->field->object_id . '"/>' .
                     '<input type="hidden" name="edd_license_deactivate_object_type" value="' . $this->field->object_type . '"/>' .
-                    '<button type="submit" class="button deactivate-license-button" name="edd_license_deactivate_license" value="' . $args['value'] . '">' . $field_args['deactivate_button'] . '</button>' .
-                '</form>' .
+                    '<button type="button" class="button deactivate-license-button" name="edd_license_deactivate_license" value="' . $args['value'] . '">' . $field_args['deactivate_button'] . '</button>' .
             '</p>';
 		}
 
@@ -116,7 +147,6 @@ class CMB_Type_EDD_License extends CMB2_Type_Base {
 
 		// Renew notice
 		$renew_notice = '';
-
 
 		if( $field_args['renew_license'] !== false && $license_status === 'valid' ) {
 
@@ -143,15 +173,130 @@ class CMB_Type_EDD_License extends CMB2_Type_Base {
 			}
 		}
 
+		// Hide license
+        if( $field_args['hide_license'] !== false && $license_status === 'valid' ) {
+
+            $character = $field_args['hide_license_character'];
+            $visible_characters = absint( $field_args['hide_license_visible_characters'] );
+
+            if( $visible_characters > 0 ) {
+                // hide a portion of the license
+                $hidden_license = str_repeat( $character, strlen( $args['value'] ) - $visible_characters ) . substr( $args['value'] , -$visible_characters );
+            } else {
+                // Completely hide the license
+                $hidden_license = str_repeat( $character, strlen( $args['value'] ) );
+            }
+
+            $args['value'] = $hidden_license;
+            $args['readonly'] = true;
+        }
+
 
 		return $this->rendered(
 			sprintf( '<input%s/>%s',
 				$this->concat_attrs( $args, array( 'desc', 'js_dependencies' ) ),
                 $args['desc'] .
+				$error_notice .
 				$deactivation_button .
 				$expiration_notice .
 				$renew_notice
 			)
 		);
+	}
+
+	public function get_license_error( $license, $field_args ) {
+
+		$message = '';
+
+		if( ! empty( $license ) && is_object( $license ) ) {
+
+			if ( false === $license->success ) {
+
+				switch( $license->error ) {
+
+					case 'expired' :
+
+						$message = sprintf(
+							__( 'Your license key expired on %s.', 'cmb2-edd-license' ),
+							date_i18n( get_option( 'date_format' ), strtotime( $license->expires, current_time( 'timestamp' ) ) )
+						);
+
+						if( $field_args['renew_license_link'] !== false ) {
+							$message .= ' ' . sprintf( __( 'Please <a href="%s" target="_blank">renew your license key</a>.', 'cmb2-edd-license' ), $field_args['renew_license_link'] );
+						}
+
+						break;
+
+					case 'revoked' :
+
+						$message = __( 'Your license key has been disabled.', 'cmb2-edd-license' );
+
+						if( $field_args['contact_link'] !== false ) {
+							$message .= ' ' . sprintf( __( 'Please <a href="%s" target="_blank">contact us</a> for more information.', 'cmb2-edd-license' ), $field_args['contact_link'] );
+						}
+
+						break;
+
+					case 'missing' :
+
+						$message = __( 'Invalid license.', 'cmb2-edd-license' );
+
+						if( $field_args['license_management_link'] !== false ) {
+							$message .= ' ' . sprintf( __( 'Please <a href="%s" target="_blank">visit your account page</a> and verify it.', 'cmb2-edd-license' ), $field_args['license_management_link'] );
+						}
+
+						break;
+
+					case 'invalid' :
+					case 'site_inactive' :
+
+						$message = sprintf( __( 'Your %s is not active for this URL.', 'cmb2-edd-license' ), $field_args['item_name'] );
+
+						if( $field_args['license_management_link'] !== false ) {
+							$message .= ' ' . sprintf( __( 'Please <a href="%s" target="_blank">visit your account page</a> to manage your license key URLs.', 'cmb2-edd-license' ), $field_args['license_management_link'] );
+						}
+
+						break;
+
+					case 'item_name_mismatch' :
+
+						$message = sprintf( __( 'This appears to be an invalid license key for %s.', 'cmb2-edd-license' ), $field_args['item_name'] );
+
+						break;
+
+					case 'no_activations_left':
+
+						$message = __( 'Your license key has reached its activation limit.', 'cmb2-edd-license' );
+
+						if( $field_args['license_management_link'] !== false ) {
+							$message .= ' ' . sprintf( __( '<a href="%s">View possible upgrades</a> now.', 'cmb2-edd-license' ), $field_args['license_management_link'] );
+						}
+
+						break;
+
+					case 'license_not_activable':
+
+						$message = __( 'The key you entered belongs to a bundle, please use the product specific license key.', 'cmb2-edd-license' );
+
+						break;
+
+					default :
+
+						$error = ! empty(  $license->error ) ?  $license->error : __( 'Unknown error', 'cmb2-edd-license' );
+						$message = sprintf( __( 'There was an error with this license key: %s.', 'cmb2-edd-license' ), $error );
+
+						if( $field_args['contact_link'] !== false ) {
+							$message .= ' ' . sprintf( __( 'Please <a href="%s" target="_blank">contact us</a> for more information.', 'cmb2-edd-license' ), $field_args['contact_link'] );
+						}
+
+						break;
+				}
+
+			}
+
+		}
+
+		return apply_filters( 'cmb2_edd_license_error_message', $message, $license, $field_args );
+
 	}
 }
